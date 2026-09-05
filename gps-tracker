@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="ro">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>GPS & Telemetry Tracker</title>
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #111; color: #fff; overflow: hidden; }
+        #map { height: 100vh; width: 100vw; }
+
+        /* Panou de control minimalist */
+        #hud {
+            position: absolute;
+            top: 15px;
+            left: 15px;
+            right: 15px;
+            z-index: 1000;
+            background: rgba(18, 18, 18, 0.9);
+            border: 1px solid #2a2a2a;
+            border-radius: 12px;
+            padding: 15px;
+            backdrop-filter: blur(8px);
+        }
+
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 12px;
+        }
+
+        .metric {
+            background: #1a1a1a;
+            padding: 8px 12px;
+            border-radius: 8px;
+            border: 1px solid #252525;
+        }
+
+        .metric .label {
+            font-size: 11px;
+            text-transform: uppercase;
+            color: #888;
+            letter-spacing: 0.5px;
+        }
+
+        .metric .value {
+            font-size: 18px;
+            font-weight: 700;
+            color: #00e676;
+            margin-top: 2px;
+        }
+
+        .metric .unit {
+            font-size: 11px;
+            font-weight: 400;
+            color: #aaa;
+        }
+
+        .btn-group {
+            display: flex;
+            gap: 10px;
+        }
+
+        button {
+            flex: 1;
+            padding: 12px;
+            border: none;
+            border-radius: 8px;
+            font-weight: 700;
+            font-size: 14px;
+            cursor: pointer;
+            text-transform: uppercase;
+        }
+
+        #btnStart { background: #00e676; color: #000; }
+        #btnStop { background: #e91e63; color: #fff; display: none; }
+        #btnDownload { background: #2979ff; color: #fff; display: none; }
+    </style>
+</head>
+<body>
+
+    <div id="hud">
+        <div class="metrics-grid">
+            <div class="metric">
+                <div class="label">Viteză</div>
+                <div class="value"><span id="speedKmh">0.0</span> <span class="unit">km/h</span></div>
+                <div style="font-size: 11px; color: #666;"><span id="speedMps">0.0</span> m/s</div>
+            </div>
+            <div class="metric">
+                <div class="label">Distanță</div>
+                <div class="value"><span id="dist">0.00</span> <span class="unit">km</span></div>
+            </div>
+            <div class="metric">
+                <div class="label">Altitudine</div>
+                <div class="value"><span id="altitude">--</span> <span class="unit">m</span></div>
+            </div>
+            <div class="metric">
+                <div class="label">Vreme Live</div>
+                <div class="value" style="font-size: 15px;"><span id="weatherTemp">--</span> <span class="unit" id="weatherDesc"></span></div>
+            </div>
+        </div>
+
+        <div class="btn-group">
+            <button id="btnStart" onclick="startTracking()">START</button>
+            <button id="btnStop" onclick="stopTracking()">STOP</button>
+            <button id="btnDownload" onclick="downloadJSONL()">Descarcă .JSONL</button>
+        </div>
+    </div>
+
+    <div id="map"></div>
+
+    <script>
+        let map = L.map('map', { zoomControl: false }).setView([46.5427, 24.5575], 14);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+
+        let watchId = null;
+        let wakeLock = null;
+        let recordedPoints = [];
+        let polyline = L.polyline([], { color: '#00e676', weight: 5 }).addTo(map);
+        let currentMarker = null;
+
+        let totalDistance = 0;
+        let lastCoord = null;
+        let lastWeatherCheck = 0;
+        let currentWeather = { temp: null, wind: null, code: null };
+
+        // Formula Haversine pentru distanță
+        function calcDistance(lat1, lon1, lat2, lon2) {
+            const R = 6371;
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLon = (lon2 - lon1) * Math.PI / 180;
+            const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+            return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+        }
+
+        // Interogare meteo gratuită fără API Key
+        async function fetchWeather(lat, lon) {
+            try {
+                const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,wind_speed_10m,weather_code`);
+                const data = await res.json();
+                if (data.current) {
+                    currentWeather.temp = data.current.temperature_2m;
+                    currentWeather.wind = data.current.wind_speed_10m;
+                    document.getElementById('weatherTemp').innerText = `${currentWeather.temp}°C`;
+                    document.getElementById('weatherDesc').innerText = `(${currentWeather.wind} km/h vânt)`;
+                }
+            } catch (err) {
+                console.error("Meteo indisponibil:", err);
+            }
+        }
+
+        async function startTracking() {
+            if (!navigator.geolocation) {
+                alert("GPS-ul nu este suportat pe acest dispozitiv/browser.");
+                return;
+            }
+
+            // Păstrează ecranul aprins dacă browserul suportă
+            try {
+                if ('wakeLock' in navigator) {
+                    wakeLock = await navigator.wakeLock.request('screen');
+                }
+            } catch (e) {
+                console.warn("Wake Lock indisponibil");
+            }
+
+            document.getElementById('btnStart').style.display = 'none';
+            document.getElementById('btnStop').style.display = 'block';
+            document.getElementById('btnDownload').style.display = 'none';
+
+            watchId = navigator.geolocation.watchPosition(
+                handlePosition,
+                (err) => alert(`Eroare GPS: ${err.message}`),
+                { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 }
+            );
+        }
+
+        function handlePosition(position) {
+            const lat = position.coords.latitude;
+            const lon = position.coords.longitude;
+            const speedMps = position.coords.speed !== null && position.coords.speed >= 0 ? position.coords.speed : 0;
+            const speedKmh = speedMps * 3.6;
+            const altitude = position.coords.altitude !== null ? position.coords.altitude : null;
+            const timestamp = position.timestamp;
+
+            // Actualizare metrici pe ecran
+            document.getElementById('speedKmh').innerText = speedKmh.toFixed(1);
+            document.getElementById('speedMps').innerText = speedMps.toFixed(1);
+            document.getElementById('altitude').innerText = altitude !== null ? altitude.toFixed(0) : '--';
+
+            // Calcul distanță
+            if (lastCoord) {
+                const step = calcDistance(lastCoord.lat, lastCoord.lon, lat, lon);
+                // Ignoră mișcările infime GPS false (< 2 metri)
+                if (step > 0.002) {
+                    totalDistance += step;
+                    document.getElementById('dist').innerText = totalDistance.toFixed(2);
+                }
+            }
+            lastCoord = { lat, lon };
+
+            // Preluare vreme la fiecare 15 minute
+            const now = Date.now();
+            if (now - lastWeatherCheck > 15 * 60 * 1000) {
+                lastWeatherCheck = now;
+                fetchWeather(lat, lon);
+            }
+
+            // Desenare pe hartă
+            const latLng = [lat, lon];
+            polyline.addLatLng(latLng);
+            if (!currentMarker) {
+                currentMarker = L.circleMarker(latLng, { radius: 8, color: '#00e676', fillColor: '#fff', fillOpacity: 1 }).addTo(map);
+            } else {
+                currentMarker.setLatLng(latLng);
+            }
+            map.setView(latLng, 16);
+
+            // Înregistrare punct în memorie
+            recordedPoints.push({
+                timestamp: timestamp,
+                latitude: lat,
+                longitude: lon,
+                altitude_meters: altitude,
+                speed_mps: Number(speedMps.toFixed(2)),
+                speed_kmh: Number(speedKmh.toFixed(2)),
+                accuracy_meters: position.coords.accuracy,
+                weather: currentWeather
+            });
+        }
+
+        function stopTracking() {
+            if (watchId) navigator.geolocation.clearWatch(watchId);
+            if (wakeLock) wakeLock.release();
+
+            document.getElementById('btnStop').style.display = 'none';
+            document.getElementById('btnStart').style.display = 'block';
+            document.getElementById('btnDownload').style.display = 'block';
+            document.getElementById('btnStart').innerText = "RESTART";
+        }
+
+        function downloadJSONL() {
+            if (recordedPoints.length === 0) {
+                alert("Nu există puncte înregistrate.");
+                return;
+            }
+
+            const jsonlContent = recordedPoints.map(p => JSON.stringify(p)).join('\n');
+            const blob = new Blob([jsonlContent], { type: 'application/x-jsonlines' });
+            const url = URL.createObjectURL(blob);
+            
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `traseu_${new Date().toISOString().slice(0,10)}.jsonl`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+    </script>
+</body>
+</html>
