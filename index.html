@@ -3,37 +3,319 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>GPS Tracker</title>
+    <title>GPS Tracker & Istoric</title>
+    
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #111; color: #fff; overflow: hidden; }
         #map { height: 100vh; width: 100vw; }
+
         #hud {
-            position: absolute; top: 15px; left: 15px; right: 15px; z-index: 1000;
-            background: rgba(18, 18, 18, 0.9); border: 1px solid #2a2a2a; border-radius: 12px;
-            padding: 15px; backdrop-filter: blur(8px);
+            position: absolute; top: 12px; left: 12px; right: 12px; z-index: 1000;
+            background: rgba(18, 18, 18, 0.92); border: 1px solid #2a2a2a; border-radius: 12px;
+            padding: 12px; backdrop-filter: blur(8px);
         }
-        .metrics-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
-        .metric { background: #1a1a1a; padding: 8px 12px; border-radius: 8px; border: 1px solid #252525; }
-        .metric .label { font-size: 11px; text-transform: uppercase; color: #888; letter-spacing: 0.5px; }
-        .metric .value { font-size: 18px; font-weight: 700; color: #00e676; margin-top: 2px; }
+
+        .metrics-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
+        .metric { background: #1a1a1a; padding: 8px 10px; border-radius: 8px; border: 1px solid #252525; }
+        .metric .label { font-size: 10px; text-transform: uppercase; color: #888; letter-spacing: 0.5px; }
+        .metric .value { font-size: 17px; font-weight: 700; color: #00e676; margin-top: 2px; }
         .metric .unit { font-size: 11px; font-weight: 400; color: #aaa; }
-        .btn-group { display: flex; gap: 10px; }
-        button { flex: 1; padding: 12px; border: none; border-radius: 8px; font-weight: 700; font-size: 14px; cursor: pointer; text-transform: uppercase; }
+
+        .btn-group { display: flex; gap: 8px; }
+        button {
+            flex: 1; padding: 10px; border: none; border-radius: 8px; font-weight: 700;
+            font-size: 13px; cursor: pointer; text-transform: uppercase;
+        }
+
         #btnStart { background: #00e676; color: #000; }
         #btnStop { background: #e91e63; color: #fff; display: none; }
-        #btnDownload { background: #2979ff; color: #fff; display: none; }
+        #btnHistory { background: #333; color: #fff; flex: 0.8; }
+
+        /* Modal Istoric */
+        #historyModal {
+            display: none; position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.85); z-index: 2000; padding: 20px; overflow-y: auto;
+        }
+        .modal-content { background: #1c1c1e; border-radius: 12px; padding: 15px; border: 1px solid #333; max-width: 500px; margin: 20px auto; }
+        .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
+        .modal-header h3 { margin: 0; font-size: 18px; }
+        .btn-close { background: none; border: none; color: #aaa; font-size: 20px; cursor: pointer; width: auto; }
+        
+        .track-item {
+            background: #252528; border-radius: 8px; padding: 12px; margin-bottom: 10px;
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .track-info { font-size: 13px; }
+        .track-info strong { color: #00e676; font-size: 15px; }
+        .track-actions { display: flex; gap: 6px; }
+        .track-actions button { padding: 6px 10px; font-size: 11px; width: auto; }
+        .btn-view { background: #007aff; color: #fff; }
+        .btn-del { background: #444; color: #ff5252; }
+        
+        .import-box { margin-top: 15px; padding-top: 15px; border-top: 1px solid #333; text-align: center; }
+        .import-box input { display: none; }
+        .btn-import { background: #2a2a2a; color: #aaa; border: 1px dashed #555; width: 100%; padding: 8px; border-radius: 6px; }
     </style>
 </head>
 <body>
+
     <div id="hud">
         <div class="metrics-grid">
             <div class="metric">
                 <div class="label">Viteză</div>
                 <div class="value"><span id="speedKmh">0.0</span> <span class="unit">km/h</span></div>
-                <div style="font-size: 11px; color: #666;"><span id="speedMps">0.0</span> m/s</div>
+                <div style="font-size: 10px; color: #666;"><span id="speedMps">0.0</span> m/s</div>
+            </div>
+            <div class="metric">
+                <div class="label">Distanță</div>
+                <div class="value"><span id="dist">0.00</span> <span class="unit">km</span></div>
+            </div>
+            <div class="metric">
+                <div class="label">Altitudine</div>
+                <div class="value"><span id="altitude">--</span> <span class="unit">m</span></div>
+            </div>
+            <div class="metric">
+                <div class="label">Vreme Live</div>
+                <div class="value" style="font-size: 13px;"><span id="weatherTemp">--</span> <span class="unit" id="weatherDesc"></span></div>
+            </div>
+        </div>
+
+        <div class="btn-group">
+            <button id="btnStart" onclick="startTracking()">START</button>
+            <button id="btnStop" onclick="stopTracking()">STOP & SALVEAZĂ</button>
+            <button id="btnHistory" onclick="openHistory()">ISTORIC</button>
+        </div>
+    </div>
+
+    <div id="historyModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Istoric Curse</h3>
+                <button class="btn-close" onclick="closeHistory()">✕</button>
+            </div>
+            <div id="trackList">Nu există curse salvate.</div>
+            
+            <div class="import-box">
+                <button class="btn-import" onclick="document.getElementById('importFile').click()">📂 Încarcă fișier vechi (.JSONL)</button>
+                <input type="file" id="importFile" accept=".jsonl" onchange="importExternalFile(event)">
+            </div>
+        </div>
+    </div>
+
+    <div id="map"></div>
+
+    <script>
+        let map = L.map('map', { zoomControl: false }).setView([46.5427, 24.5575], 14);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+
+        let watchId = null, wakeLock = null, recordedPoints = [];
+        let polyline = L.polyline([], { color: '#00e676', weight: 5 }).addTo(map);
+        let currentMarker = null, totalDistance = 0, lastCoord = null, lastWeatherCheck = 0;
+        let currentWeather = { temp: null, wind: null };
+
+        function calcDistance(lat1, lon1, lat2, lon2) {
+            const R = 6371;
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLon = (lon2 - lon1) * Math.PI / 180;
+            const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+            return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+        }
+
+        async function fetchWeather(lat, lon) {
+            try {
+                const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,wind_speed_10m`);
+                const data = await res.json();
+                if (data.current) {
+                    currentWeather.temp = data.current.temperature_2m;
+                    currentWeather.wind = data.current.wind_speed_10m;
+                    document.getElementById('weatherTemp').innerText = `${currentWeather.temp}°C`;
+                    document.getElementById('weatherDesc').innerText = `(${currentWeather.wind} km/h)`;
+                }
+            } catch (err) {}
+        }
+
+        async function startTracking() {
+            if (!navigator.geolocation) { alert("GPS indisponibil."); return; }
+            try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
+
+            recordedPoints = [];
+            totalDistance = 0;
+            lastCoord = null;
+            polyline.setLatLngs([]);
+            if (currentMarker) map.removeLayer(currentMarker);
+
+            document.getElementById('btnStart').style.display = 'none';
+            document.getElementById('btnStop').style.display = 'block';
+
+            watchId = navigator.geolocation.watchPosition(handlePosition, (err) => alert(`GPS: ${err.message}`), {
+                enableHighAccuracy: true, maximumAge: 0, timeout: 5000
+            });
+        }
+
+        function handlePosition(position) {
+            const lat = position.coords.latitude;
+            const lon = position.coords.longitude;
+            const speedMps = position.coords.speed !== null && position.coords.speed >= 0 ? position.coords.speed : 0;
+            const speedKmh = speedMps * 3.6;
+            const altitude = position.coords.altitude !== null ? position.coords.altitude : null;
+
+            document.getElementById('speedKmh').innerText = speedKmh.toFixed(1);
+            document.getElementById('speedMps').innerText = speedMps.toFixed(1);
+            document.getElementById('altitude').innerText = altitude !== null ? altitude.toFixed(0) : '--';
+
+            if (lastCoord) {
+                const step = calcDistance(lastCoord.lat, lastCoord.lon, lat, lon);
+                if (step > 0.002) {
+                    totalDistance += step;
+                    document.getElementById('dist').innerText = totalDistance.toFixed(2);
+                }
+            }
+            lastCoord = { lat, lon };
+
+            const now = Date.now();
+            if (now - lastWeatherCheck > 15 * 60 * 1000) {
+                lastWeatherCheck = now;
+                fetchWeather(lat, lon);
+            }
+
+            const latLng = [lat, lon];
+            polyline.addLatLng(latLng);
+            if (!currentMarker) {
+                currentMarker = L.circleMarker(latLng, { radius: 7, color: '#00e676', fillColor: '#fff', fillOpacity: 1 }).addTo(map);
+            } else {
+                currentMarker.setLatLng(latLng);
+            }
+            map.setView(latLng, 16);
+
+            recordedPoints.push({
+                timestamp: position.timestamp,
+                latitude: lat,
+                longitude: lon,
+                altitude_meters: altitude,
+                speed_mps: Number(speedMps.toFixed(2)),
+                speed_kmh: Number(speedKmh.toFixed(2)),
+                weather: currentWeather
+            });
+        }
+
+        function stopTracking() {
+            if (watchId) navigator.geolocation.clearWatch(watchId);
+            if (wakeLock) wakeLock.release();
+
+            document.getElementById('btnStop').style.display = 'none';
+            document.getElementById('btnStart').style.display = 'block';
+
+            if (recordedPoints.length > 2) {
+                saveToLocalStorage(recordedPoints, totalDistance);
+                alert(`Cursa a fost salvată în Istoric! (${totalDistance.toFixed(2)} km)`);
+            }
+        }
+
+        // --- GESTIUNE ISTORIC ---
+        function saveToLocalStorage(points, distance) {
+            const tracks = JSON.parse(localStorage.getItem('gps_tracks') || '[]');
+            const maxSpeed = Math.max(...points.map(p => p.speed_kmh || 0));
+            const newTrack = {
+                id: Date.now(),
+                date: new Date().toLocaleString('ro-RO'),
+                distance: distance.toFixed(2),
+                maxSpeed: maxSpeed.toFixed(1),
+                points: points
+            };
+            tracks.unshift(newTrack);
+            localStorage.setItem('gps_tracks', JSON.stringify(tracks));
+        }
+
+        function openHistory() {
+            document.getElementById('historyModal').style.display = 'block';
+            renderTrackList();
+        }
+
+        function closeHistory() {
+            document.getElementById('historyModal').style.display = 'none';
+        }
+
+        function renderTrackList() {
+            const listContainer = document.getElementById('trackList');
+            const tracks = JSON.parse(localStorage.getItem('gps_tracks') || '[]');
+
+            if (tracks.length === 0) {
+                listContainer.innerHTML = '<p style="color: #888;">Nu ai nicio cursă înregistrată încă.</p>';
+                return;
+            }
+
+            listContainer.innerHTML = tracks.map(t => `
+                <div class="track-item">
+                    <div class="track-info">
+                        <strong>${t.distance} km</strong> | Max: ${t.maxSpeed} km/h<br>
+                        <span style="color: #777; font-size: 11px;">${t.date}</span>
+                    </div>
+                    <div class="track-actions">
+                        <button class="btn-view" onclick="displayTrack(${t.id})">Vezi</button>
+                        <button class="btn-del" onclick="deleteTrack(${t.id})">✕</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function displayTrack(id) {
+            const tracks = JSON.parse(localStorage.getItem('gps_tracks') || '[]');
+            const track = tracks.find(t => t.id === id);
+            if (!track) return;
+
+            renderTrackOnMap(track.points, track.distance, track.maxSpeed);
+            closeHistory();
+        }
+
+        function deleteTrack(id) {
+            if (!confirm("Ștergi această cursă?")) return;
+            let tracks = JSON.parse(localStorage.getItem('gps_tracks') || '[]');
+            tracks = tracks.filter(t => t.id !== id);
+            localStorage.setItem('gps_tracks', JSON.stringify(tracks));
+            renderTrackList();
+        }
+
+        function renderTrackOnMap(points, distance, maxSpeed) {
+            const latlngs = points.map(p => [p.latitude, p.longitude]);
+            polyline.setLatLngs(latlngs);
+            map.fitBounds(polyline.getBounds());
+
+            document.getElementById('dist').innerText = distance;
+            document.getElementById('speedKmh').innerText = maxSpeed;
+            document.getElementById('altitude').innerText = points[points.length - 1].altitude_meters || '--';
+            if (points[points.length - 1].weather) {
+                document.getElementById('weatherTemp').innerText = `${points[points.length - 1].weather.temp || '--'}°C`;
+            }
+        }
+
+        function importExternalFile(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const lines = e.target.result.split('\n');
+                const points = [];
+                lines.forEach(l => {
+                    if (l.trim()) {
+                        try { points.push(JSON.parse(l)); } catch(err){}
+                    }
+                });
+                if (points.length > 0) {
+                    saveToLocalStorage(points, 0);
+                    renderTrackList();
+                    alert("Fișier importat cu succes în istoric!");
+                }
+            };
+            reader.readAsText(file);
+        }
+    </script>
+</body>
+</html>
             </div>
             <div class="metric">
                 <div class="label">Distanță</div>
